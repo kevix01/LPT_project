@@ -4,7 +4,8 @@ from typing import List, Dict, Any, TypedDict
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_llm7 import ChatLLM7
+#from langchain_llm7 import ChatLLM7
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_qdrant import QdrantVectorStore
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import START, StateGraph, MessagesState
@@ -30,14 +31,14 @@ class RAGSystemWithQueryGeneration:
         self.embedding_model_type = embedding_model
 
         # Setup LLM
-        # os.environ["GOOGLE_API_KEY"] = "AIzaSyC24Wq37BNGGbO-qDOR1MR28UQ93BPhOd4"
-        # self.model = ChatGoogleGenerativeAI(model="gemini-3-flash", temperature=0.3)
-        os.environ["LLM7_API_KEY"] = "hQftHz8uiu+HWzvXoI/aUppTi4rPQFP/QgAFez5mpirIWUVbBsh6KE2H7cFHuMdWqNhsQ5JOMsY8FfOohzqpKajYvwOxJYAB0oyxKhLjmLB4wJcSIK64oxu1zfzqXPsCPLG8oIGcUq5qyb0="
-        self.model = ChatLLM7(
+        os.environ["GOOGLE_API_KEY"] = ""
+        self.model = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0.3)
+        #os.environ["LLM7_API_KEY"] = "hQftHz8uiu+HWzvXoI/aUppTi4rPQFP/QgAFez5mpirIWUVbBsh6KE2H7cFHuMdWqNhsQ5JOMsY8FfOohzqpKajYvwOxJYAB0oyxKhLjmLB4wJcSIK64oxu1zfzqXPsCPLG8oIGcUq5qyb0="
+        #self.model = ChatLLM7(
             # api_key="la_tua_api_key",  # la tua chiave qui
-            base_url="https://api.llm7.io/v1",
-            model="default"  # o "fast", "pro", oppure un model ID specifico
-        )
+            #base_url="https://api.llm7.io/v1",
+            #model="default"  # o "fast", "pro", oppure un model ID specifico
+        #)
 
         # Setup embeddings
         self._setup_embeddings()
@@ -114,7 +115,7 @@ class RAGSystemWithQueryGeneration:
 
         # Prompt per la risposta finale
         self.answer_prompt = ChatPromptTemplate.from_messages([
-            ("system", """Sei un assistente universitario esperto in Grammatiche Context Free.
+            ("system", """Sei un assistente universitario esperto in Reti Neurali.
             Rispondi alla domanda basandoti ESCLUSIVAMENTE sul contesto fornito.
 
             Se il contesto non contiene informazioni sufficienti, rispondi:
@@ -132,7 +133,7 @@ class RAGSystemWithQueryGeneration:
             Risposta:""")
         ])
 
-    def _get_conversation_context(self, messages: List[BaseMessage], max_tokens: int = 1000) -> List[BaseMessage]:
+    def _get_conversation_context(self, messages: List[BaseMessage], max_tokens: int = 600) -> List[BaseMessage]:
         """
         Estrae il contesto conversazionale rilevante.
         Mantiene i messaggi più recenti entro il limite di token.
@@ -143,7 +144,7 @@ class RAGSystemWithQueryGeneration:
         # Prendi tutti i messaggi tranne l'ultimo (la domanda attuale)
         previous_messages = messages[:-1]
 
-        return previous_messages
+        #return previous_messages
 
         # TODO: da capire se possiamo usarlo
         # Usa trim_messages per gestire i token
@@ -157,6 +158,20 @@ class RAGSystemWithQueryGeneration:
 
         trimmed_context = trimmer.invoke(previous_messages)
         return trimmed_context
+    
+    # prende come contesto della conversazione solo gli ultimi 4 messaggi (gli ultimi 2 scambi domanda-risposta)
+    def _get_conversation_context_last_messages(self, messages: List[BaseMessage], last_k: int = 4) -> List[BaseMessage]:
+        """
+        Mantiene solo gli ultimi k messaggi (escludendo la domanda corrente che è l'ultimo della lista messages)
+        """
+        if len(messages) <= 1:
+            return []
+            
+        # messages[:-1] prende tutto tranne la domanda corrente
+        previous_messages = messages[:-1]
+        
+        # Prende solo gli ultimi 'last_k' messaggi
+        return previous_messages[-last_k:]
 
     def _generate_optimized_query(self, question: str, conversation_context: List[BaseMessage]) -> str:
         """
