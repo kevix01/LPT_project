@@ -6,6 +6,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_community.document_loaders import PyPDFLoader
+from langchain_qdrant import QdrantVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.tools import tool
 #from langchain.agents import create_agent
@@ -13,9 +14,11 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import START, MessagesState, StateGraph
 from langchain_core.messages import HumanMessage, trim_messages
 from langgraph.checkpoint.memory import MemorySaver
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import VectorParams, Distance
 
 # selezione LLM (modello di gemini)
-os.environ["GOOGLE_API_KEY"] = "AIzaSyCkiBHbt_ZqGqAUodkyEK-E4fdni_PWYIY"
+os.environ["GOOGLE_API_KEY"] = "AIzaSyC24Wq37BNGGbO-qDOR1MR28UQ93BPhOd4"
 model = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
 
 # --- SETUP EMBEDDINGS ---
@@ -33,26 +36,8 @@ else:
         encode_kwargs={'normalize_embeddings': False}
     )
 
-# -- CARICAMENTO DOCUMENTI PDF --
-file_path = "./05 - Context Free Languages.pdf"
-loader = PyPDFLoader(file_path)
-docs = loader.load()
-# - stampa metadati del pdf caricato
-#pprint.pp(docs[0].metadata)
-# - stampa contenuto di una pagina
-#print(docs[0].page_content[:10]) #stampa primi 10 caratteri della prima pagina
-
-# splitting documenti PDF
-text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=1000,  # chunk size (characters)
-    chunk_overlap=200,  # chunk overlap (characters)
-    add_start_index=True,  # track index in original document
-)
-all_splits = text_splitter.split_documents(docs)
-print(f"Documento diviso in {len(all_splits)} chunk.")
-# print(all_splits[8])
-
 # -- CREAZIONE VECTOR STORE --
+"""
 if flag_embedding=="g":
     print("Gli embedding vengono creati usando il modello: ",embeddings.model)
     vector_store_dump_file = "vector_store_gemini.dump"
@@ -65,72 +50,47 @@ if os.path.exists(vector_store_dump_file): # verifica se il vector store dump è
     vector_store = InMemoryVectorStore.load(vector_store_dump_file,embeddings)
     print(f"Vector store caricato da {vector_store_dump_file}")
 else:
-    # creazione vector store
-    vector_store = InMemoryVectorStore(embeddings)
-    # Crea una lista di ID
-    ids = [f"doc_{i}" for i in range(len(all_splits))]
-    document_ids = vector_store.add_documents(documents=all_splits, ids=ids)
-    print(f"Vector store creato")
-    vector_store.dump(vector_store_dump_file)
-    print(f"Vector store dump to {vector_store_dump_file}")
-#print(document_ids)
-
-""" # -- Implementazione chatbot RAG con memoria --
-# Define a new graph with a specific format for state (memory)
-# MessagesState is a predefined schema for storing messages
-workflow = StateGraph(state_schema=MessagesState)
-
-# define a trimmer to avoid long prompts
-# when history contains many message
-trimmer = trim_messages(
-    max_tokens = 100,       # limit in tokens
-    strategy = "last",      # keep last messages
-    token_counter = model,  # the model provides token count
-    allow_partial=False,    # do not trunctae messages
-    start_on="human"        # first message must be by human
+"""
+# creazione vector store
+# vector_store = InMemoryVectorStore(embeddings)
+client = QdrantClient(
+    url="http://localhost",
 )
 
-# function excuted by node
-def call_model(state: MessagesState):
-    trimmed_messages = trimmer.invoke(state['messages'])
-    response = model.invoke(trimmed_messages)
-    return {"messages": response}
+vector_store = QdrantVectorStore(client=client, collection_name="Test", embedding=embeddings)
 
-# define an execution graph with only one node (model)
-workflow.add_edge(START, "model")
-workflow.add_node("model", call_model)
+if not client.collection_exists("Test"):
+    # -- CARICAMENTO DOCUMENTI PDF --
+    file_path = "./05 - Context Free Languages.pdf"
+    loader = PyPDFLoader(file_path)
+    docs = loader.load()
+    # - stampa metadati del pdf caricato
+    # pprint.pp(docs[0].metadata)
+    # - stampa contenuto di una pagina
+    # print(docs[0].page_content[:10]) #stampa primi 10 caratteri della prima pagina
 
-# add checkpoint to save state in memory
-app = workflow.compile(checkpointer=MemorySaver())
+    # splitting documenti PDF
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,  # chunk size (characters)
+        chunk_overlap=200,  # chunk overlap (characters)
+        add_start_index=True,  # track index in original document
+    )
+    all_splits = text_splitter.split_documents(docs)
+    print(f"Documento diviso in {len(all_splits)} chunk.")
+    # print(all_splits[8])
 
-# configuration to link execution to a thread_id
-config = {"configurable": {"thread_id": "user1"}}
-
-# build template for RAG query
-# template has 2 placeholders
-# question - for the user query
-# context - for the retrieved context
-prompt_template = ChatPromptTemplate.from_messages(
-    [("system", Sei un assistente universitario. Hai accesso a un tool che recupera il contesto da una dispensa riguardante le grammatiche context free. Usa il tool per cercare informazioni e POI rispondi alla domanda dell'utente basandoti ESCLUSIVAMENTE sui documenti trovati.), ("user",Question: {question} Context: {context} Answer:)])
-# human-loop
-while True:
-    # get user input
-    question = input("Q > ")
-    # exit loop if 'quit' or 'exit' command is given
-    if question=="quit" or question=="exit":
-        break
-
-    #search for similar contexts
-    context = vector_store.similarity_search(question, k=4)
-
-    # instantiate the prompt with placeholder values
-    prompt = app.invoke(
-        {"question": question,
-          "context": "\n".join(doc.page_content for doc in context)})
-    # call model
-    response = model.invoke(prompt)
-    # print answer
-    print("A > ",response.content) """
+    vector_size = len(embeddings.embed_query("sample text"))
+    client.create_collection(
+        collection_name="Test",
+        vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE)
+    )
+    # Crea una lista di ID
+    # ids = [f"doc_{i}" for i in range(len(all_splits))]
+    document_ids = vector_store.add_documents(documents=all_splits)
+    print(f"Vector store creato")
+    # vector_store.dump(vector_store_dump_file)
+    # print(f"Vector store dump to {vector_store_dump_file}")
+    #print(document_ids)
 
 # --- 2. DEFINIZIONE DEL PROMPT TEMPLATE ---
 # Aggiungiamo MessagesPlaceholder per gestire la memoria (chat history)
