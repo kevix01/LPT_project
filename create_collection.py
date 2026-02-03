@@ -1,5 +1,7 @@
 import os
 import glob
+import time
+import math
 from typing import List
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
@@ -31,7 +33,7 @@ class CollectionCreator:
     def _setup_embeddings(self):
         """Configura il modello di embedding"""
         if self.embedding_model_type == "gemini":
-            os.environ["GOOGLE_API_KEY"] = "AIzaSyC24Wq37BNGGbO-qDOR1MR28UQ93BPhOd4"
+            os.environ["GOOGLE_API_KEY"] = "AIzaSyDVw4dD0bYpQWYspzX3lajwn9q2kSY_hLY"
             self.embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
             print("Usando il modello embedding: gemini-embedding-001")
         elif self.embedding_model_type == "hf":
@@ -52,7 +54,7 @@ class CollectionCreator:
             folder_path: Percorso della cartella contenente i PDF
 
         Returns:
-            Lista di documenti caricati
+            Lista di documenti caricati, divisi in pagine
         """
         # Trova tutti i file PDF nella cartella
         pdf_files = glob.glob(os.path.join(folder_path, "*.pdf"))
@@ -68,7 +70,6 @@ class CollectionCreator:
         all_docs = []
         for pdf_file in pdf_files:
             print(f"Caricamento: {os.path.basename(pdf_file)}...")
-            # loader = PyPDFLoader(pdf_file)
             loader = PDFPlumberLoader(pdf_file)
             docs = loader.load()
             all_docs.extend(docs)
@@ -81,9 +82,9 @@ class CollectionCreator:
         Divide i documenti in chunk.
 
         Args:
-            documents: Lista di documenti da dividere
+            documents: Lista di documenti suddivisi già in pagine, da dividere in chunk
             chunk_size: Dimensione di ogni chunk in caratteri
-            chunk_overlap: Sovrapposizione tra chunk
+            chunk_overlap: Sovrapposizione tra chunk in caratteri
 
         Returns:
             Lista di chunk
@@ -98,61 +99,97 @@ class CollectionCreator:
         print(f"Documenti divisi in {len(all_splits)} chunk")
 
         return all_splits
-
+    
     def create_collection(self, collection_name: str, documents: List):
         """
-        Crea una nuova collezione Qdrant e la popola con i documenti.
+        Crea una nuova collezione Qdrant e la popola con i chunk forniti.
+        Processa i chunk in batch da 80 per rispettare i rate limits,
+        attendendo 60 secondi tra un batch e l'altro.
 
         Args:
             collection_name: Nome della nuova collezione
-            documents: Lista di documenti da indicizzare
+            documents: Lista di chunk (Document objects) da indicizzare
         """
-        # Verifica se la collezione esiste già
+        # --- 1. Gestione esistenza collezione ---
         if self.client.collection_exists(collection_name):
             overwrite = input(f"La collezione '{collection_name}' esiste già. Sovrascriverla? (s/n): ")
             if overwrite.lower() != 's':
                 print("Operazione annullata.")
                 return
             else:
-                # Elimina la collezione esistente
                 self.client.delete_collection(collection_name)
                 print(f"Collezione '{collection_name}' esistente eliminata.")
 
-        # Calcola la dimensione dei vettori
-        sample_embedding = self.embeddings.embed_query("sample text")
-        vector_size = len(sample_embedding)
+        # --- 2. Calcolo dimensione vettori ---
+        try:
+            # Test rapido per ottenere la dimensione
+            sample_embedding = self.embeddings.embed_query("Query di prova")
+            vector_size = len(sample_embedding)
+        except Exception as e:
+            print(f"Errore nel test degli embedding: {e}")
+            return
 
-        # Crea la collezione
+        # --- 3. Creazione Collezione su Qdrant ---
         print(f"Creazione collezione '{collection_name}'...")
         self.client.create_collection(
             collection_name=collection_name,
             vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE)
         )
 
-        # Crea il vector store
+        # Inizializza il Vector Store
         vector_store = QdrantVectorStore(
             client=self.client,
             collection_name=collection_name,
             embedding=self.embeddings
         )
 
-        # Aggiungi i documenti
-        print("Aggiunta documenti alla collezione...")
-        document_ids = vector_store.add_documents(documents=documents)
+        # --- 4. Aggiunta documenti in Batch ---
+        print("Inizio indicizzazione dei chunk in batch...")
+        
+        BATCH_SIZE = 80
+        total_chunks = len(documents)
+        # Calcola quanti batch totali avremo (utile per i log)
+        total_batches = math.ceil(total_chunks / BATCH_SIZE) 
+        all_document_ids = []
 
-        print(f"✓ Collezione '{collection_name}' creata con successo!")
-        print(f"  - Documenti aggiunti: {len(document_ids)}")
+        # Ciclo da 0 alla fine, avanzando di BATCH_SIZE alla volta
+        for i in range(0, total_chunks, BATCH_SIZE):
+            # Seleziona i chunk da processare
+            batch_docs = documents[i : i + BATCH_SIZE]
+            current_batch_num = (i // BATCH_SIZE) + 1
+            
+            print(f"--> Processando batch {current_batch_num}/{total_batches} ({len(batch_docs)} chunk)...")
+
+            try:
+                # Aggiunge il batch corrente
+                ids = vector_store.add_documents(documents=batch_docs)
+                all_document_ids.extend(ids)
+                print(f"    Batch {current_batch_num} completato.")
+            except Exception as e:
+                print(f"!!! Errore nel batch {current_batch_num}: {e}")
+            
+            # Controlla se ci sono ancora documenti dopo questo batch
+            if i + BATCH_SIZE < total_chunks:
+                print("    Attesa di 60 secondi per reset Rate Limit API...")
+                time.sleep(60)
+            else:
+                print("    Ultimo batch completato.")
+
+        # --- 5. Riepilogo Finale ---
+        print(f"Collezione '{collection_name}' creata con successo!")
+        print(f"  - Chunk totali elaborati: {len(all_document_ids)} su {total_chunks}")
         print(f"  - Dimensione vettori: {vector_size}")
 
-        return vector_size, len(document_ids)
+        return vector_size, len(all_document_ids)
 
     def create_collection_from_pdfs(self, collection_name: str, folder_path: str = "./docs"):
         """
         Crea una collezione a partire da tutti i PDF in una cartella.
+        Richiama i metodi definiti sopra.
 
         Args:
-            collection_name: Nome della nuova collezione
-            folder_path: Percorso della cartella contenente i PDF
+            collection_name: nome della nuova collezione
+            folder_path: percorso della cartella contenente i PDF
         """
         print(f"\n=== Creazione Collezione: {collection_name} ===")
 
@@ -167,7 +204,6 @@ class CollectionCreator:
 
 
 def main():
-    """Funzione principale per la creazione di collezioni"""
     print("=== Creatore Collezioni Qdrant ===\n")
 
     # Scelta del modello di embedding
@@ -197,19 +233,9 @@ def main():
     try:
         # Crea la collezione
         creator.create_collection_from_pdfs(collection_name, folder_path)
-
-        print("\n✓ Operazione completata con successo!")
-        print(f"\nPer usare questa collezione con il sistema RAG:")
-        print(f"  python rag_system.py")
-        print(f"  > Inserisci il nome della collezione: {collection_name}")
-
+        print("\nOperazione completata con successo!")
     except Exception as e:
         print(f"Errore durante la creazione della collezione: {e}")
-        print("\nAssicurati che:")
-        print("1. Qdrant sia in esecuzione (docker run -p 6333:6333 qdrant/qdrant)")
-        print("2. La cartella contenga file PDF validi")
-        print("3. Per Gemini: l'API key sia configurata correttamente")
-
 
 if __name__ == "__main__":
     main()

@@ -1,10 +1,8 @@
-# rag_system_improved.py
 import os
 from typing import List, Dict, Any, TypedDict
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-#from langchain_llm7 import ChatLLM7
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_qdrant import QdrantVectorStore
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -16,11 +14,11 @@ from qdrant_client import QdrantClient
 
 # Definiamo uno stato personalizzato che estende MessagesState
 class RAGState(TypedDict):
-    messages: List[BaseMessage]  # Tutti i messaggi della conversazione
-    original_question: str
-    optimized_query: str
-    context: str
-    conversation_context: List[BaseMessage]  # History per contesto conversazionale
+    messages: List[BaseMessage]  # tutti i messaggi della conversazione
+    original_question: str # domanda originale
+    optimized_query: str # domanda ottimizzata
+    context: str # chunk più rilevanti rispetto alla query ottimizzata
+    conversation_context: List[BaseMessage]  # contesto conversazionale da inserire nel prompt per la generazione della query ottimizzata
 
 
 class RAGSystemWithQueryGeneration:
@@ -31,14 +29,8 @@ class RAGSystemWithQueryGeneration:
         self.embedding_model_type = embedding_model
 
         # Setup LLM
-        os.environ["GOOGLE_API_KEY"] = ""
-        self.model = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0.3)
-        #os.environ["LLM7_API_KEY"] = "hQftHz8uiu+HWzvXoI/aUppTi4rPQFP/QgAFez5mpirIWUVbBsh6KE2H7cFHuMdWqNhsQ5JOMsY8FfOohzqpKajYvwOxJYAB0oyxKhLjmLB4wJcSIK64oxu1zfzqXPsCPLG8oIGcUq5qyb0="
-        #self.model = ChatLLM7(
-            # api_key="la_tua_api_key",  # la tua chiave qui
-            #base_url="https://api.llm7.io/v1",
-            #model="default"  # o "fast", "pro", oppure un model ID specifico
-        #)
+        os.environ["GOOGLE_API_KEY"] = "AIzaSyDVw4dD0bYpQWYspzX3lajwn9q2kSY_hLY"
+        self.model = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.3)
 
         # Setup embeddings
         self._setup_embeddings()
@@ -94,17 +86,17 @@ class RAGSystemWithQueryGeneration:
             5. Restituisci SOLO la query ottimizzata in inglese
 
             **ESEMPI CON CONTESTO:**
-            - Conversazione precedente: Utente: "Cosa sono le grammatiche context-free?"
-            - Domanda attuale: "E per quelle regolari?"
-            - Query: "definition regular grammars"
+            - Conversazione precedente: Utente: "Cosa sono le reti RNN?"
+            - Domanda attuale: "E come vengono addestrate?"
+            - Query: "RNN training process"
 
-            - Conversazione precedente: Utente: "Mi spieghi l'algoritmo CYK"
-            - Domanda attuale: "Come si applica alle grammatiche ambigue?"
-            - Query: "CYK algorithm ambiguous grammars application"
+            - Conversazione precedente: Utente: "In cosa consiste la tecnica di dropout?"
+            - Domanda attuale: "Che vantaggi ci garantisce?"
+            - Query: "Dropout technique advantages"
 
-            - Conversazione precedente: Utente: "Quali sono le proprietà di chiusura?"
-            - Domanda attuale: "E per l'intersezione?"
-            - Query: "closure properties intersection context-free languages"
+            - Conversazione precedente: Utente: "Gli MLP preservano informazioni spaziali dell'immagine in input?"
+            - Domanda attuale: "E le CNN?"
+            - Query: "Mantaining of spatial information for CNN"
 
             Ricorda: usa il contesto della conversazione per rendere la query più precisa e specifica."""),
 
@@ -135,7 +127,7 @@ class RAGSystemWithQueryGeneration:
 
     def _get_conversation_context(self, messages: List[BaseMessage], max_tokens: int = 600) -> List[BaseMessage]:
         """
-        Estrae il contesto conversazionale rilevante.
+        Estrae il contesto conversazionale.
         Mantiene i messaggi più recenti entro il limite di token.
         """
         if len(messages) <= 1:
@@ -144,9 +136,6 @@ class RAGSystemWithQueryGeneration:
         # Prendi tutti i messaggi tranne l'ultimo (la domanda attuale)
         previous_messages = messages[:-1]
 
-        #return previous_messages
-
-        # TODO: da capire se possiamo usarlo
         # Usa trim_messages per gestire i token
         trimmer = trim_messages(
             max_tokens=max_tokens,
@@ -158,20 +147,6 @@ class RAGSystemWithQueryGeneration:
 
         trimmed_context = trimmer.invoke(previous_messages)
         return trimmed_context
-    
-    # prende come contesto della conversazione solo gli ultimi 4 messaggi (gli ultimi 2 scambi domanda-risposta)
-    def _get_conversation_context_last_messages(self, messages: List[BaseMessage], last_k: int = 4) -> List[BaseMessage]:
-        """
-        Mantiene solo gli ultimi k messaggi (escludendo la domanda corrente che è l'ultimo della lista messages)
-        """
-        if len(messages) <= 1:
-            return []
-            
-        # messages[:-1] prende tutto tranne la domanda corrente
-        previous_messages = messages[:-1]
-        
-        # Prende solo gli ultimi 'last_k' messaggi
-        return previous_messages[-last_k:]
 
     def _generate_optimized_query(self, question: str, conversation_context: List[BaseMessage]) -> str:
         """
@@ -179,8 +154,6 @@ class RAGSystemWithQueryGeneration:
         """
         # Crea la chain con il prompt che include la conversation_context
         chain = self.query_generation_prompt | self.model
-
-        print("History:", conversation_context)
 
         # Invoca con conversation_context come variabile del prompt
         response = chain.invoke({
@@ -192,13 +165,13 @@ class RAGSystemWithQueryGeneration:
         return optimized_query
 
     def _retrieve_relevant_docs(self, query: str, k: int = 4) -> List[str]:
-        """Recupera documenti rilevanti"""
+        """Recupera documenti (chunk) rilevanti dal vector store"""
         try:
             docs = self.vector_store.similarity_search(query, k=k)
             doc_contents = [doc.page_content for doc in docs]
             return doc_contents
         except Exception as e:
-            print(f"[ERRORE] Errore nel recupero documenti: {e}")
+            print(f"Errore nel recupero documenti: {e}")
             return ["Errore nel recupero documenti."]
 
     def _setup_workflow(self):
@@ -225,13 +198,13 @@ class RAGSystemWithQueryGeneration:
             # Estrai il contesto conversazionale
             conversation_context = self._get_conversation_context(messages)
 
-            # Genera query ottimizzata CON contesto
+            # Genera query ottimizzata CON contesto conversazionale
             optimized_query = self._generate_optimized_query(
                 original_question,
                 conversation_context
             )
 
-            # Recupera documenti
+            # Recupera documenti rilevanti rispetto alla query ottimizzata
             doc_contents = self._retrieve_relevant_docs(optimized_query, k=4)
             context_text = "\n\n".join(doc_contents)
 
@@ -245,7 +218,7 @@ class RAGSystemWithQueryGeneration:
 
         def generate_answer(state: RAGState):
             """
-            Fase 2: Genera la risposta usando contesto e conversazione.
+            Fase 2: Genera la risposta usando contesto (chunk rilevanti) e contesto conversazionale.
             """
             original_question = state.get("original_question", "")
             context_text = state.get("context", "")
@@ -286,7 +259,7 @@ class RAGSystemWithQueryGeneration:
         print(f"Collezione: {self.collection_name}")
         print(f"Embedding: {self.embedding_model_type}")
         print(f"{'=' * 60}")
-        print("Scrivi 'quit' per uscire")
+        print("Scrivi 'quit' oppure 'exit' per uscire")
         if debug_mode:
             print("Modalità debug: ON")
         else:
@@ -297,7 +270,7 @@ class RAGSystemWithQueryGeneration:
         messages = []  # Inizializza la lista dei messaggi
 
         while True:
-            question = input("\n📝 Q > ").strip()
+            question = input("\n Q > ").strip()
 
             if question.lower() in ["quit", "exit", "q"]:
                 print("Arrivederci!")
@@ -314,12 +287,12 @@ class RAGSystemWithQueryGeneration:
             input_message = HumanMessage(content=question)
             messages.append(input_message)  # Aggiungi alla history
 
-            print("\n🔍 Ricerca in corso...")
+            print("\n Ricerca in corso...")
 
             try:
-                # Usa stream o invoke con update per mantenere lo stato
+                # Invocazione della app
                 final_state = self.app.invoke(
-                    {"messages": messages},  # Passa TUTTA la history
+                    {"messages": messages},  # Passa tutta la history
                     config=config
                 )
 
@@ -337,49 +310,16 @@ class RAGSystemWithQueryGeneration:
                 # Recupera e mostra la risposta
                 if messages:
                     last_message = messages[-1]
-                    print(f"\n🤖 A > {last_message.content}")
+                    print(f"\n A > {last_message.content}")
                 else:
-                    print("\n🤖 A > Nessuna risposta generata")
+                    print("\n A > Nessuna risposta generata")
 
                 print("-" * 60)
 
             except Exception as e:
-                print(f"\n❌ Errore: {e}")
-
-    def query(self, question: str, thread_id: str = "default_thread") -> Dict[str, Any]:
-        """Esegue una singola query"""
-        config = {"configurable": {"thread_id": thread_id}}
-        input_message = HumanMessage(content=question)
-
-        try:
-            final_state = self.app.invoke(
-                {"messages": [input_message]},
-                config=config
-            )
-
-            result = {
-                "answer": final_state.get('messages', [])[-1].content if final_state.get(
-                    'messages') else "Nessuna risposta",
-                "optimized_query": final_state.get("optimized_query", "N/A"),
-                "context_sources": len(final_state.get("context", "").split("\n\n")),
-                "conversation_context_length": len(final_state.get("conversation_context", [])),
-                "success": True
-            }
-
-            return result
-
-        except Exception as e:
-            return {
-                "answer": f"Errore: {e}",
-                "optimized_query": "N/A",
-                "context_sources": 0,
-                "conversation_context_length": 0,
-                "success": False
-            }
-
+                print(f"\n Errore: {e}")
 
 def main():
-    """Funzione principale"""
     print("=== Sistema RAG con Contesto Conversazionale ===\n")
 
     # Configurazione
@@ -403,9 +343,9 @@ def main():
         )
         rag_system.chat(thread_id="user_1", debug_mode=debug_mode)
     except ValueError as e:
-        print(f"\n❌ Errore: {e}")
+        print(f"\n Errore: {e}")
     except Exception as e:
-        print(f"\n❌ Errore imprevisto: {e}")
+        print(f"\n Errore imprevisto: {e}")
 
 
 if __name__ == "__main__":
