@@ -29,7 +29,7 @@ class RAGSystemWithQueryGeneration:
         self.embedding_model_type = embedding_model
 
         # Setup LLM
-        os.environ["GOOGLE_API_KEY"] = "AIzaSyDVw4dD0bYpQWYspzX3lajwn9q2kSY_hLY"
+        os.environ["GOOGLE_API_KEY"] = ""
         self.model = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.3)
 
         # Setup embeddings
