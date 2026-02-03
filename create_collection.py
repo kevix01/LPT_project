@@ -33,7 +33,7 @@ class CollectionCreator:
     def _setup_embeddings(self):
         """Configura il modello di embedding"""
         if self.embedding_model_type == "gemini":
-            os.environ["GOOGLE_API_KEY"] = "AIzaSyDVw4dD0bYpQWYspzX3lajwn9q2kSY_hLY"
+            os.environ["GOOGLE_API_KEY"] = ""
             self.embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
             print("Usando il modello embedding: gemini-embedding-001")
         elif self.embedding_model_type == "hf":
