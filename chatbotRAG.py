@@ -18,7 +18,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import VectorParams, Distance
 
 # selezione LLM (modello di gemini)
-os.environ["GOOGLE_API_KEY"] = "AIzaSyC24Wq37BNGGbO-qDOR1MR28UQ93BPhOd4"
+os.environ["GOOGLE_API_KEY"] = ""
 model = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
 
 # --- SETUP EMBEDDINGS ---
@@ -178,4 +178,5 @@ while True:
         # Stampiamo l'output del modello quando arriva
         if "model" in event:
             print("A > ", event["model"]["messages"][0].content)
+
             print("-" * 50)
