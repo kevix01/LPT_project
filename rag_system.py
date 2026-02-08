@@ -25,7 +25,7 @@ class RAGSystem:
         self.embedding_model_type = embedding_model
 
         # Setup LLM
-        os.environ["GOOGLE_API_KEY"] = "AIzaSyC24Wq37BNGGbO-qDOR1MR28UQ93BPhOd4"
+        os.environ["GOOGLE_API_KEY"] = ""
         self.model = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
 
         # Setup embeddings
