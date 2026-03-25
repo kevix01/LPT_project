@@ -1,35 +1,39 @@
 import os
-from typing import List, Dict, Any, TypedDict
-from langchain_google_genai import ChatGoogleGenerativeAI
+from typing import List, TypedDict
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_qdrant import QdrantVectorStore
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langgraph.graph import START, StateGraph, MessagesState
-from langchain_core.messages import HumanMessage, AIMessage, trim_messages, BaseMessage
+from langgraph.graph import START, StateGraph
+from langchain_core.messages import HumanMessage, trim_messages, BaseMessage
 from langgraph.checkpoint.memory import MemorySaver
 from qdrant_client import QdrantClient
+from dotenv import load_dotenv
 
 
 # Definiamo uno stato personalizzato che estende MessagesState
 class RAGState(TypedDict):
     messages: List[BaseMessage]  # tutti i messaggi della conversazione
-    original_question: str # domanda originale
-    optimized_query: str # domanda ottimizzata
-    context: str # chunk più rilevanti rispetto alla query ottimizzata
-    conversation_context: List[BaseMessage]  # contesto conversazionale da inserire nel prompt per la generazione della query ottimizzata
+    original_question: str  # domanda originale
+    optimized_query: str  # domanda ottimizzata
+    context: str  # chunk più rilevanti rispetto alla query ottimizzata
+    conversation_context: List[BaseMessage]  # contesto da inserire nel prompt per la generazione della query ottimizzata
 
 
 class RAGSystemWithQueryGeneration:
     """Sistema RAG che genera query ottimizzate per la ricerca"""
 
     def __init__(self, collection_name: str, embedding_model: str = "gemini"):
+        load_dotenv()
         self.collection_name = collection_name
         self.embedding_model_type = embedding_model
 
         # Setup LLM
-        os.environ["GOOGLE_API_KEY"] = ""
+        api_key = os.getenv("GOOGLE_API_KEY", "")
+        if not api_key:
+            raise ValueError("La variabile d'ambiente GOOGLE_API_KEY non è impostata. Inseriscila nel file .env.")
+        os.environ["GOOGLE_API_KEY"] = api_key
         self.model = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.3)
 
         # Setup embeddings
@@ -176,7 +180,7 @@ class RAGSystemWithQueryGeneration:
 
     def _setup_workflow(self):
         """Configura il grafo di workflow"""
-        workflow = StateGraph(state_schema=RAGState)
+        workflow = StateGraph(state_schema=RAGState)  # type: ignore
 
         def generate_query_and_retrieve(state: RAGState):
             """
@@ -241,8 +245,8 @@ class RAGSystemWithQueryGeneration:
             return {"messages": new_messages}
 
         # Aggiungi nodi e edge
-        workflow.add_node("query_generator", generate_query_and_retrieve)
-        workflow.add_node("answer_generator", generate_answer)
+        workflow.add_node("query_generator", generate_query_and_retrieve)  # type: ignore
+        workflow.add_node("answer_generator", generate_answer)  # type: ignore
 
         workflow.add_edge(START, "query_generator")
         workflow.add_edge("query_generator", "answer_generator")
@@ -292,8 +296,9 @@ class RAGSystemWithQueryGeneration:
             try:
                 # Invocazione della app
                 final_state = self.app.invoke(
-                    {"messages": messages},  # Passa tutta la history
-                    config=config
+                    # Passa tutta la history
+                    {"messages": messages},  # type: ignore
+                    config=config  # type: ignore
                 )
 
                 # Recupera la risposta aggiornata

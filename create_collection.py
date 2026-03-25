@@ -3,10 +3,11 @@ import glob
 import time
 import math
 from typing import List
+from dotenv import load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
-from langchain_community.document_loaders import PyPDFLoader, PDFPlumberLoader
+from langchain_community.document_loaders import PDFPlumberLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import VectorParams, Distance
@@ -22,6 +23,8 @@ class CollectionCreator:
         Args:
             embedding_model: 'gemini' per GoogleGenerativeAI o 'hf' per HuggingFace
         """
+        load_dotenv()
+
         self.embedding_model_type = embedding_model
 
         # Setup embeddings
@@ -33,7 +36,11 @@ class CollectionCreator:
     def _setup_embeddings(self):
         """Configura il modello di embedding"""
         if self.embedding_model_type == "gemini":
-            os.environ["GOOGLE_API_KEY"] = ""
+            # Carica la chiave API da variabile d'ambiente (file .env)
+            api_key = os.getenv("GOOGLE_API_KEY", "")
+            if not api_key:
+                raise ValueError("La variabile d'ambiente GOOGLE_API_KEY non è impostata. Inseriscila nel file .env.")
+            os.environ["GOOGLE_API_KEY"] = api_key
             self.embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
             print("Usando il modello embedding: gemini-embedding-001")
         elif self.embedding_model_type == "hf":
@@ -46,7 +53,8 @@ class CollectionCreator:
         else:
             raise ValueError("embedding_model deve essere 'gemini' o 'hf'")
 
-    def load_pdfs_from_folder(self, folder_path: str = "./docs") -> List:
+    @staticmethod
+    def load_pdfs_from_folder(folder_path: str = "./docs") -> List:
         """
         Carica tutti i PDF da una cartella.
 
@@ -77,7 +85,8 @@ class CollectionCreator:
 
         return all_docs
 
-    def split_documents(self, documents: List, chunk_size: int = 1000, chunk_overlap: int = 200) -> List:
+    @staticmethod
+    def split_documents(documents: List, chunk_size: int = 1000, chunk_overlap: int = 200) -> List:
         """
         Divide i documenti in chunk.
 
@@ -146,17 +155,17 @@ class CollectionCreator:
         # --- 4. Aggiunta documenti in Batch ---
         print("Inizio indicizzazione dei chunk in batch...")
         
-        BATCH_SIZE = 80
+        _BATCH_SIZE = 80
         total_chunks = len(documents)
         # Calcola quanti batch totali avremo (utile per i log)
-        total_batches = math.ceil(total_chunks / BATCH_SIZE) 
+        total_batches = math.ceil(total_chunks / _BATCH_SIZE)
         all_document_ids = []
 
         # Ciclo da 0 alla fine, avanzando di BATCH_SIZE alla volta
-        for i in range(0, total_chunks, BATCH_SIZE):
+        for i in range(0, total_chunks, _BATCH_SIZE):
             # Seleziona i chunk da processare
-            batch_docs = documents[i : i + BATCH_SIZE]
-            current_batch_num = (i // BATCH_SIZE) + 1
+            batch_docs = documents[i : i + _BATCH_SIZE]
+            current_batch_num = (i // _BATCH_SIZE) + 1
             
             print(f"--> Processando batch {current_batch_num}/{total_batches} ({len(batch_docs)} chunk)...")
 
@@ -169,7 +178,7 @@ class CollectionCreator:
                 print(f"!!! Errore nel batch {current_batch_num}: {e}")
             
             # Controlla se ci sono ancora documenti dopo questo batch
-            if i + BATCH_SIZE < total_chunks:
+            if i + _BATCH_SIZE < total_chunks:
                 print("    Attesa di 60 secondi per reset Rate Limit API...")
                 time.sleep(60)
             else:
@@ -179,8 +188,6 @@ class CollectionCreator:
         print(f"Collezione '{collection_name}' creata con successo!")
         print(f"  - Chunk totali elaborati: {len(all_document_ids)} su {total_chunks}")
         print(f"  - Dimensione vettori: {vector_size}")
-
-        return vector_size, len(all_document_ids)
 
     def create_collection_from_pdfs(self, collection_name: str, folder_path: str = "./docs"):
         """
